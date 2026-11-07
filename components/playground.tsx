@@ -2,6 +2,7 @@
 
 import {
   BookOpen,
+  BookText,
   Check,
   ChevronDown,
   ChevronRight,
@@ -9,6 +10,8 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitPullRequest,
+  House,
+  MoreHorizontal,
   Moon,
   Plus,
   RotateCcw,
@@ -22,6 +25,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import gitCommandCatalog from "@/data/git-command-catalog.json";
 import { COMMANDS } from "@/arbre-engine/src/services/git/registry";
 import { TreeScene } from "@/components/tree-scene";
 import type {
@@ -31,24 +35,21 @@ import type {
 } from "@/types/git";
 
 type View = "playground" | "learn" | "commands" | "settings";
+type MobileDestination = "home" | "tree" | "playground" | "learn" | "documentation" | "more";
 type ApiResult<T> = T & { error?: string; output?: string };
-
-const commandExamples = [
-  "git init",
-  "git status",
-  "git add .",
-  'git commit -m "A small first step"',
-  "git branch feature/garden",
-  "git switch feature/garden",
-  "git merge feature/garden",
+type GitCommandEntry = (typeof gitCommandCatalog.builtinCommands)[number];
+const commandExamples = [...new Set(Object.values(COMMANDS).flatMap((spec) => spec.examples))];
+const commandCategories = [...new Set(gitCommandCatalog.builtinCommands.map((command) => command.category))].sort();
+const documentationSuggestions = [
+  "undo my last commit",
+  "find who changed this line",
+  "list files tracked by Git",
+  "inspect an object",
+  "stage part of a file",
+  "recover a lost commit",
+  "compare two branches",
+  "work with a remote",
 ];
-
-const commandDescriptions = Object.values(COMMANDS).map((spec) => [
-  `git ${spec.name}`,
-  spec.summary,
-  `Module ${spec.module}`,
-  spec.examples[0] ?? `git ${spec.name}`,
-] as const);
 
 const learningLessons = [
   {
@@ -118,7 +119,10 @@ function playWoodenTone(context: AudioContext) {
 }
 
 export function Playground() {
-  const [view, setView] = useState<View>("playground");
+  const [view, setViewState] = useState<View>("playground");
+  const [activeMobileDestination, setActiveMobileDestination] = useState<MobileDestination>("home");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [repository, setRepository] = useState<RepositoryState | null>(null);
   const [output, setOutput] = useState<string[]>([
@@ -140,6 +144,11 @@ export function Playground() {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  const [commandCategory, setCommandCategory] = useState("All categories");
+  const [commandDifficulty, setCommandDifficulty] = useState("all");
+  const [commandRisk, setCommandRisk] = useState("all");
+  const [selectedDocCommand, setSelectedDocCommand] = useState("add");
+  const [recentlyViewedCommands, setRecentlyViewedCommands] = useState<string[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [completedLessons, setCompletedLessons] = useState([false, false, false]);
@@ -149,6 +158,13 @@ export function Playground() {
     null,
   ]);
   const commandInput = useRef<HTMLInputElement>(null);
+  const documentationSearchInput = useRef<HTMLInputElement>(null);
+  const treePanelRef = useRef<HTMLElement>(null);
+  const terminalPanelRef = useRef<HTMLElement>(null);
+  const manualFrameRef = useRef<HTMLIFrameElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const moreFirstItemRef = useRef<HTMLButtonElement>(null);
+  const keyboardBaselineRef = useRef(0);
   const initializationRef = useRef<
     Promise<{
       id: string;
@@ -158,6 +174,14 @@ export function Playground() {
     }> | null
   >(null);
   const audioContext = useRef<AudioContext | null>(null);
+
+  const navigateView = useCallback((next: View, destination?: MobileDestination) => {
+    setViewState(next);
+    setActiveMobileDestination(destination ?? (
+      next === "learn" ? "learn" : next === "commands" ? "documentation" : next === "settings" ? "more" : "playground"
+    ));
+    setMoreOpen(false);
+  }, []);
 
   const syncState = useCallback(async (id: string) => {
     const result = await requestJson<{ state: RepositoryState }>(
@@ -223,6 +247,81 @@ export function Playground() {
     document.documentElement.dataset.theme = isDark ? "dark" : "light";
     if (preferencesLoaded) window.localStorage.setItem("arbor-theme", isDark ? "dark" : "light");
   }, [isDark, preferencesLoaded]);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("arbor-recent-git-docs");
+    if (!stored) return;
+    try {
+      const names = JSON.parse(stored) as string[];
+      setRecentlyViewedCommands(names.filter((name) => gitCommandCatalog.builtinCommands.some((entry) => entry.name === name)).slice(0, 6));
+    } catch {
+      window.localStorage.removeItem("arbor-recent-git-docs");
+    }
+  }, []);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (view !== "playground") return;
+      if (activeMobileDestination === "home") window.scrollTo({ top: 0, behavior: "smooth" });
+      if (activeMobileDestination === "tree") treePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (activeMobileDestination === "playground") {
+        terminalPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        commandInput.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeMobileDestination, view]);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    moreFirstItemRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMoreOpen(false);
+      moreButtonRef.current?.focus();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [moreOpen]);
+
+  useEffect(() => {
+    keyboardBaselineRef.current = window.visualViewport?.height ?? window.innerHeight;
+    const syncKeyboard = () => {
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const active = document.activeElement;
+      const isEditing = active instanceof HTMLElement && (
+        active.matches("input, textarea, select") || active.isContentEditable
+      );
+      const isSmallViewport = window.innerWidth <= 900;
+      setMobileKeyboardOpen(isSmallViewport && isEditing && keyboardBaselineRef.current - viewportHeight > 120);
+      if (!isEditing || !isSmallViewport) keyboardBaselineRef.current = viewportHeight;
+    };
+    window.addEventListener("resize", syncKeyboard);
+    window.addEventListener("focusin", syncKeyboard);
+    window.addEventListener("focusout", syncKeyboard);
+    window.visualViewport?.addEventListener("resize", syncKeyboard);
+    syncKeyboard();
+    return () => {
+      window.removeEventListener("resize", syncKeyboard);
+      window.removeEventListener("focusin", syncKeyboard);
+      window.removeEventListener("focusout", syncKeyboard);
+      window.visualViewport?.removeEventListener("resize", syncKeyboard);
+    };
+  }, []);
+
+  useEffect(() => {
+    const documentBody = manualFrameRef.current?.contentDocument;
+    if (!documentBody) return;
+    let themeStyle = documentBody.getElementById("arbor-manual-theme") as HTMLStyleElement | null;
+    if (!themeStyle) {
+      themeStyle = documentBody.createElement("style");
+      themeStyle.id = "arbor-manual-theme";
+      documentBody.head.appendChild(themeStyle);
+    }
+    themeStyle.textContent = isDark
+      ? "html, body, #header, #content, #footer { background: #302f28 !important; color: #fff9e9 !important; } a, a code { color: #efc43a !important; } pre, code, .listingblock, .literalblock { background-color: #25251f !important; color: #fff9e9 !important; } table, th, td { border-color: #5a5545 !important; }"
+      : "html, body, #header, #content, #footer { background: #fffdf5 !important; color: #211f1b !important; } a, a code { color: #725500 !important; } pre, code, .listingblock, .literalblock { background-color: #f3f0e5 !important; color: #211f1b !important; } table, th, td { border-color: #d8d1bd !important; }";
+  }, [isDark, selectedDocCommand]);
 
   const files = useMemo(() => {
     const known = new Set(repository?.files ?? ["README.md", "src/hello.txt"]);
@@ -521,12 +620,13 @@ export function Playground() {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        commandInput.current?.focus();
+        if (view === "commands") documentationSearchInput.current?.focus();
+        else commandInput.current?.focus();
       }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     if (view !== "playground" || !command) return;
@@ -545,27 +645,48 @@ export function Playground() {
 
   const activeBranch =
     repository?.branches.find((branch) => branch.current)?.name ?? repository?.branch;
-  const displayedCommands = commandDescriptions.filter(([name, text, concept]) =>
-    `${name} ${text} ${concept}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  const selectedCommandEntry = gitCommandCatalog.builtinCommands.find((entry) => entry.name === selectedDocCommand) ?? gitCommandCatalog.builtinCommands[0];
+  const recentEntries = recentlyViewedCommands
+    .map((name) => gitCommandCatalog.builtinCommands.find((entry) => entry.name === name))
+    .filter((entry): entry is GitCommandEntry => Boolean(entry));
+  const filteredCommandEntries = gitCommandCatalog.builtinCommands.filter((entry) => {
+    const query = search.trim().toLowerCase();
+    const searchableText = `${entry.name} git ${entry.category} ${entry.sourceCategory} ${entry.description} ${entry.overview} ${entry.searchTerms.join(" ")}`.toLowerCase();
+    return (!query || searchableText.includes(query))
+      && (commandCategory === "All categories" || entry.category === commandCategory)
+      && (commandDifficulty === "all" || entry.difficulty === commandDifficulty)
+      && (commandRisk === "all" || entry.risk === commandRisk);
+  });
+  const relatedEntries = gitCommandCatalog.builtinCommands
+    .filter((entry) => entry.category === selectedCommandEntry.category && entry.name !== selectedCommandEntry.name)
+    .slice(0, 5);
+  const selectedPlaygroundExample = COMMANDS[selectedCommandEntry.name]?.examples[0];
+  const openCommandEntry = (name: string) => {
+    setSelectedDocCommand(name);
+    setRecentlyViewedCommands((current) => {
+      const updated = [name, ...current.filter((item) => item !== name)].slice(0, 6);
+      window.localStorage.setItem("arbor-recent-git-docs", JSON.stringify(updated));
+      return updated;
+    });
+  };
 
   return (
-    <div className={`app-shell${isDark ? " theme-dark" : ""}`}>
+    <div className={`app-shell${isDark ? " theme-dark" : ""}${mobileKeyboardOpen ? " mobile-keyboard-open" : ""}`}>
       <aside className="sidebar">
         <Link className="brand" href="/" aria-label="Arbor home">
           <span className="brand-mark"><Trees size={18} strokeWidth={1.8} /></span>
           <span>arbor<span className="brand-period">.</span></span>
         </Link>
         <div className="workspace-label">YOUR WORKSPACE</div>
-        <nav className="main-nav" aria-label="Main navigation">
-          <button className={view === "playground" ? "nav-link active" : "nav-link"} onClick={() => setView("playground")}>
+        <nav className="main-nav" aria-label="Workspace navigation">
+          <button className={view === "playground" ? "nav-link active" : "nav-link"} aria-current={view === "playground" ? "page" : undefined} onClick={() => navigateView("playground")}>
             <Sprout size={17} /> Playground <span className="nav-current" />
           </button>
-          <button className={view === "learn" ? "nav-link active" : "nav-link"} onClick={() => setView("learn")}>
+          <button className={view === "learn" ? "nav-link active" : "nav-link"} aria-current={view === "learn" ? "page" : undefined} onClick={() => navigateView("learn")}>
             <BookOpen size={17} /> Git academy
           </button>
-          <button className={view === "commands" ? "nav-link active" : "nav-link"} onClick={() => setView("commands")}>
-            <TerminalIcon size={17} /> Command guide
+          <button className={view === "commands" ? "nav-link active" : "nav-link"} aria-current={view === "commands" ? "page" : undefined} onClick={() => navigateView("commands")}>
+            <BookText size={17} /> Git command encyclopedia
           </button>
         </nav>
         <div className="side-divider" />
@@ -580,7 +701,7 @@ export function Playground() {
           {repository?.initialized ? "Git repository" : "Not initialized yet"}
         </div>
         <div className="sidebar-bottom">
-          <button className="nav-link" onClick={() => setView("settings")}><Settings2 size={17} /> Preferences</button>
+          <button className={view === "settings" ? "nav-link active" : "nav-link"} onClick={() => navigateView("settings")}><Settings2 size={17} /> Preferences</button>
           <button className="nav-link" onClick={() => setIsDark((current) => !current)}>
             {isDark ? <Sun size={17} /> : <Moon size={17} />}
             {isDark ? "Light appearance" : "Dark appearance"}
@@ -597,14 +718,14 @@ export function Playground() {
         <header className="topbar">
           <div className="breadcrumb">
             <span>Playground</span><ChevronRight size={14} />
-            <strong>{view === "playground" ? "My first repository" : view === "learn" ? "Git academy" : view === "commands" ? "Command guide" : "Preferences"}</strong>
+            <strong>{view === "playground" ? "My first repository" : view === "learn" ? "Git academy" : view === "commands" ? "Git command encyclopedia" : "Preferences"}</strong>
           </div>
           <div className="topbar-actions">
             <span className="privacy-pill"><span /> Private sandbox</span>
             <button className="icon-button" aria-label="Toggle dark appearance" title="Toggle dark appearance" onClick={() => setIsDark((current) => !current)}>
               {isDark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
-            <button className="help-button" onClick={() => setView("learn")}><CircleHelp size={15} /> Help</button>
+            <button className="help-button" onClick={() => navigateView("learn")}><CircleHelp size={15} /> Help</button>
           </div>
         </header>
 
@@ -618,7 +739,7 @@ export function Playground() {
                   <p>Every commit is a little growth. Try things out — this garden is yours to experiment in.</p>
                 </div>
                 <div className="intro-actions">
-                  <button className="subtle-button" onClick={() => setView("learn")}><BookOpen size={15} /> Learn Git</button>
+                  <button className="subtle-button" onClick={() => navigateView("learn")}><BookOpen size={15} /> Learn Git</button>
                   <button className="reset-button" onClick={() => void resetRepository()} disabled={!sessionId || busy}>
                     <RotateCcw size={14} /> Start over
                   </button>
@@ -629,7 +750,7 @@ export function Playground() {
               {notice && !error && <div className="feedback notice-feedback" role="status"><Check size={15} />{notice}<button onClick={() => setNotice("")} aria-label="Dismiss message"><X size={14} /></button></div>}
 
               <div className="workspace-grid">
-                <section className="tree-card panel">
+                <section className="tree-card panel" id="tree-workspace" ref={treePanelRef} tabIndex={-1}>
                   <div className="panel-heading tree-heading">
                     <div><div className="section-title">Your growing tree</div><div className="section-caption">{!repository?.initialized ? "Empty ground, ready to plant" : !repository.commits.length ? "Roots are down; your first commit starts the trunk" : "Commits extend wood. A successful push grows leaves."}</div></div>
                     <div className="tree-controls">
@@ -691,7 +812,7 @@ export function Playground() {
                       <span className="state-count">{repository?.commits.length ?? "—"}</span>
                     </div>
                   </div>
-                  <div className="recent-heading"><span>RECENT GROWTH</span><button onClick={() => setView("learn")}>How it works <ChevronRight size={13} /></button></div>
+                  <div className="recent-heading"><span>RECENT GROWTH</span><button onClick={() => navigateView("learn")}>How it works <ChevronRight size={13} /></button></div>
                   <div className="commit-list">
                     {repository?.commits.slice(0, 3).map((commit) => (
                       <button
@@ -743,7 +864,7 @@ export function Playground() {
                   <textarea id="file-editor" className="file-editor" value={fileContents} onChange={(event) => setFileContents(event.target.value)} spellCheck={false} />
                 </section>
 
-                <section className="terminal-card panel">
+                <section className="terminal-card panel" id="git-playground" ref={terminalPanelRef} tabIndex={-1}>
                   <div className="panel-heading terminal-heading">
                     <div className="terminal-title"><span className="terminal-icon"><TerminalIcon size={15} /></span><span><strong>Git terminal</strong><small>Real Git · isolated playground</small></span></div>
                     <div className="terminal-tools"><span className="safe-label"><span /> SANDBOXED</span><button className="icon-button small-icon" onClick={() => setOutput([])} title="Clear terminal" aria-label="Clear terminal"><RotateCcw size={14} /></button></div>
@@ -843,7 +964,7 @@ export function Playground() {
                             : lesson.review}
                         </p>
                       )}
-                      <button className="lesson-action" onClick={() => { setView("playground"); setCommand(lesson.command); }}>
+                      <button className="lesson-action" onClick={() => { navigateView("playground"); setCommand(lesson.command); }}>
                         Try a command <ChevronRight size={14} />
                       </button>
                     </div>
@@ -855,18 +976,79 @@ export function Playground() {
           )}
 
           {view === "commands" && (
-            <section className="commands-page">
-              <div className="eyebrow"><span className="eyebrow-line" /> A FRIENDLY FIELD GUIDE</div>
-              <h1>Commands, <em>explained.</em></h1>
-              <p className="learning-lede">The small set of Git commands supported in your isolated playground.</p>
-              <label className="command-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the command guide" /><kbd>⌘ K</kbd></label>
-              <div className="command-guide-list">
-                {displayedCommands.map(([name, text, concept, example]) => (
-                  <article key={name} className="command-guide-row"><code>{name}</code><span>{text}</span><b>{concept}</b><button onClick={() => { setView("playground"); setCommand(example); commandInput.current?.focus(); }}>Try it <ChevronRight size={13} /></button></article>
-                ))}
-                {!displayedCommands.length && <div className="no-results">No matching commands. Try “branch” or “staging”.</div>}
+            <section className="commands-page encyclopedia-page">
+              <div className="eyebrow"><span className="eyebrow-line" /> THE GIT FIELD ENCYCLOPEDIA</div>
+              <h1>Every command has <em>a place.</em></h1>
+              <p className="learning-lede">Browse the installed Git {gitCommandCatalog.gitVersion} command set, its low-level tools, and version-matched manuals. Documentation never enables a command in the playground.</p>
+              <div className="encyclopedia-stats" aria-label="Coverage summary">
+                <span><strong>{gitCommandCatalog.builtinCommands.length}</strong> installed built-ins</span>
+                <span><strong>{gitCommandCatalog.builtinCommands.filter((entry) => entry.manualAvailable).length}</strong> full manuals included</span>
+                <span><strong>{gitCommandCatalog.externalHelpers.length}</strong> separate helpers</span>
               </div>
-              <div className="command-safety"><CircleHelp size={16} /><span><strong>Why only a few commands?</strong> This learning terminal runs a deliberately small, allowlisted set of real Git actions. It never runs arbitrary shell input.</span></div>
+              <div className="encyclopedia-toolbar">
+                <label className="command-search"><Search size={17} /><input ref={documentationSearchInput} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search a command, task, concept, or error" list="encyclopedia-search-suggestions" aria-label="Search Git command documentation" /><datalist id="encyclopedia-search-suggestions">{documentationSuggestions.map((suggestion) => <option key={suggestion} value={suggestion} />)}</datalist><kbd>Ctrl K</kbd></label>
+                <div className="encyclopedia-filters" aria-label="Filter commands">
+                  <label><span>Category</span><select value={commandCategory} onChange={(event) => setCommandCategory(event.target.value)}><option>All categories</option>{commandCategories.map((category) => <option key={category}>{category}</option>)}</select></label>
+                  <label><span>Difficulty</span><select value={commandDifficulty} onChange={(event) => setCommandDifficulty(event.target.value)}><option value="all">Any level</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
+                  <label><span>Risk</span><select value={commandRisk} onChange={(event) => setCommandRisk(event.target.value)}><option value="all">Any risk</option><option value="informational">Informational</option><option value="safe">Safe</option><option value="history-modifying">History modifying</option><option value="destructive">Destructive</option></select></label>
+                </div>
+              </div>
+
+              <div className="encyclopedia-layout">
+                <aside className="encyclopedia-browser panel" aria-label="Command directory">
+                  <div className="encyclopedia-panel-heading"><div><span>COMMAND DIRECTORY</span><strong>Alphabetical index</strong></div><b>{filteredCommandEntries.length}</b></div>
+                  {recentEntries.length > 0 && (
+                    <div className="recent-commands"><span>RECENTLY VIEWED</span>{recentEntries.map((entry) => <button key={entry.name} onClick={() => openCommandEntry(entry.name)}>{entry.name}</button>)}</div>
+                  )}
+                  <div className="encyclopedia-command-list" id="all-command-list" role="listbox" aria-label="Alphabetical Git commands">
+                    {filteredCommandEntries.map((entry) => (
+                      <button key={entry.name} className={selectedCommandEntry.name === entry.name ? "encyclopedia-command active" : "encyclopedia-command"} role="option" aria-selected={selectedCommandEntry.name === entry.name} onClick={() => openCommandEntry(entry.name)}>
+                        <code>git {entry.name}</code><span>{entry.description}</span>{!entry.manualAvailable && <small>internal</small>}
+                      </button>
+                    ))}
+                    {filteredCommandEntries.length === 0 && <div className="no-results">No matching commands. Try “undo my last commit” or clear a filter.</div>}
+                  </div>
+                  <details className="external-helper-list"><summary>External helpers ({gitCommandCatalog.externalHelpers.length})</summary><p>These executables are discovered alongside Git but are not Git built-ins.</p>{gitCommandCatalog.externalHelpers.map((entry) => <div key={entry.name}><code>{entry.name}</code><span>{entry.description}</span></div>)}</details>
+                </aside>
+
+                <article className="encyclopedia-detail panel" aria-live="polite">
+                  <div className="encyclopedia-detail-top"><span>{selectedCommandEntry.category}</span><span className={`risk-badge risk-${selectedCommandEntry.risk}`}>{selectedCommandEntry.risk.replaceAll("-", " ")}</span></div>
+                  <h2><code>git {selectedCommandEntry.name}</code></h2>
+                  <p className="encyclopedia-summary">{selectedCommandEntry.description}</p>
+                  <div className="encyclopedia-pills"><span>{selectedCommandEntry.difficulty}</span><span>{selectedCommandEntry.sourceType}</span>{selectedCommandEntry.deprecated && <span className="deprecated-pill">deprecated</span>}{selectedCommandEntry.experimental && <span className="experimental-pill">experimental</span>}{selectedCommandEntry.internal && <span>internal helper</span>}{selectedCommandEntry.playgroundSupported && <span className="supported-pill">playground supported</span>}</div>
+                  {selectedCommandEntry.synopsis && <section className="encyclopedia-section"><h3>Syntax</h3><pre className="encyclopedia-code"><code>{selectedCommandEntry.synopsis}</code></pre></section>}
+                  {selectedCommandEntry.overview && <section className="encyclopedia-section"><h3>What it does</h3><p>{selectedCommandEntry.overview}</p></section>}
+                  <div className="encyclopedia-manual-heading"><div><span>COMPLETE VERSION-MATCHED REFERENCE</span><strong>Git {selectedCommandEntry.gitVersion}</strong></div>{selectedCommandEntry.officialDocumentationUrl && <a href={selectedCommandEntry.officialDocumentationUrl} target="_blank" rel="noreferrer">Open official manual <ChevronRight size={13} /></a>}</div>
+                  {selectedCommandEntry.manualAvailable ? (
+                    <iframe ref={manualFrameRef} key={selectedCommandEntry.name} className="git-manual-frame" src={selectedCommandEntry.manualPath} title={`Complete Git ${selectedCommandEntry.gitVersion} manual for git ${selectedCommandEntry.name}`} loading="lazy" sandbox="allow-same-origin" onLoad={() => {
+                      const manualDocument = manualFrameRef.current?.contentDocument;
+                      if (!manualDocument) return;
+                      let themeStyle = manualDocument.getElementById("arbor-manual-theme") as HTMLStyleElement | null;
+                      if (!themeStyle) {
+                        themeStyle = manualDocument.createElement("style");
+                        themeStyle.id = "arbor-manual-theme";
+                        manualDocument.head.appendChild(themeStyle);
+                      }
+                      themeStyle.textContent = isDark
+                        ? "html, body, #header, #content, #footer { background: #302f28 !important; color: #fff9e9 !important; } a, a code { color: #efc43a !important; } pre, code, .listingblock, .literalblock { background-color: #25251f !important; color: #fff9e9 !important; } table, th, td { border-color: #5a5545 !important; }"
+                        : "html, body, #header, #content, #footer { background: #fffdf5 !important; color: #211f1b !important; } a, a code { color: #725500 !important; } pre, code, .listingblock, .literalblock { background-color: #f3f0e5 !important; color: #211f1b !important; } table, th, td { border-color: #d8d1bd !important; }";
+                    }} />
+                  ) : (
+                    <div className="manual-unavailable"><CircleHelp size={17} /><div><strong>No standalone command manual is installed.</strong><p>This internal helper is still present in the inventory. Its details are not expanded into user-facing options or examples here; see the coverage report for the remaining gaps.</p></div></div>
+                  )}
+                  <div className="encyclopedia-command-actions">
+                    {selectedCommandEntry.playgroundSupported && selectedPlaygroundExample ? <button className="small-primary" onClick={() => { navigateView("playground"); setCommand(selectedPlaygroundExample); }}>Try an allowlisted example <ChevronRight size={13} /></button> : <span>Documentation only · not enabled in the playground</span>}
+                  </div>
+                </article>
+
+                <aside className="encyclopedia-aside" aria-label="Command details and related references">
+                  <section className="encyclopedia-info-card panel"><span>AT A GLANCE</span><dl><div><dt>Category</dt><dd>{selectedCommandEntry.category}</dd></div><div><dt>Difficulty</dt><dd>{selectedCommandEntry.difficulty}</dd></div><div><dt>Typical risk</dt><dd>{selectedCommandEntry.risk.replaceAll("-", " ")}</dd></div><div><dt>Remote required</dt><dd>{selectedCommandEntry.requiresRemoteInfrastructure ? "For its usual workflow" : "No"}</dd></div><div><dt>Playground</dt><dd>{selectedCommandEntry.playgroundSupported ? "Supported subset" : "Not enabled"}</dd></div></dl></section>
+                  <section className="encyclopedia-info-card panel"><span>RELATED COMMANDS</span><div className="related-command-list">{relatedEntries.map((entry) => <button key={entry.name} onClick={() => openCommandEntry(entry.name)}><code>git {entry.name}</code><ChevronRight size={13} /></button>)}</div></section>
+                  <section className="encyclopedia-info-card panel"><span>OFFICIAL GUIDES · {gitCommandCatalog.guides.length}</span><div className="guide-link-list">{gitCommandCatalog.guides.map((guide) => <a key={guide.name} href={guide.manualPath || guide.officialDocumentationUrl} target="_blank" rel="noreferrer">{guide.title}<ChevronRight size={12} /></a>)}</div></section>
+                  <section className="encyclopedia-info-card panel"><span>CONCEPTS & FORMATS · {gitCommandCatalog.concepts.length}</span><div className="guide-link-list">{gitCommandCatalog.concepts.map((concept) => <a key={concept.name} href={concept.manualPath || concept.officialDocumentationUrl} target="_blank" rel="noreferrer">{concept.title}<ChevronRight size={12} /></a>)}</div></section>
+                  <div className="command-safety"><CircleHelp size={16} /><span><strong>Read before running.</strong> The full documentation is broader than ARBOR&apos;s deliberately small, secured playground allowlist. An entry here never grants terminal access.</span></div>
+                </aside>
+              </div>
             </section>
           )}
 
@@ -878,7 +1060,7 @@ export function Playground() {
               <div className="settings-list">
                 <div className="setting-row"><span className="setting-icon"><Moon size={18} /></span><span><strong>Appearance</strong><small>Choose a light or dark garden.</small></span><button className="setting-toggle" onClick={() => setIsDark((current) => !current)} aria-pressed={isDark}>{isDark ? "Dark" : "Light"} <span className={isDark ? "toggle-knob on" : "toggle-knob"} /></button></div>
                 <div className="setting-row"><span className="setting-icon"><GitPullRequest size={18} /></span><span><strong>Branch growth sounds</strong><small>Optional soft feedback after a Git action.</small></span><button className="setting-toggle" onClick={toggleSounds} aria-pressed={soundEnabled}>{soundEnabled ? "On" : "Off"} <span className={soundEnabled ? "toggle-knob on" : "toggle-knob"} /></button></div>
-                <div className="setting-row"><span className="setting-icon"><RotateCcw size={18} /></span><span><strong>Temporary playground</strong><small>Your files are isolated and expire after three hours.</small></span><button className="setting-reset" onClick={() => { setView("playground"); void resetRepository(); }}>Reset playground</button></div>
+                <div className="setting-row"><span className="setting-icon"><RotateCcw size={18} /></span><span><strong>Temporary playground</strong><small>Your files are isolated and expire after three hours.</small></span><button className="setting-reset" onClick={() => { navigateView("playground"); void resetRepository(); }}>Reset playground</button></div>
               </div>
               <div className="settings-note"><CircleHelp size={16} /> Audio is opt-in. No sound plays unless you enable it and trigger an action.</div>
             </section>
@@ -887,7 +1069,24 @@ export function Playground() {
           <footer className="page-footer"><span>Made for curious minds <span className="footer-leaf">✳</span></span><span><span className="footer-dot" /> A safe place to learn Git</span></footer>
         </div>
       </main>
-      <button className="mobile-help" onClick={() => setView("learn")} aria-label="Open Git academy"><BookOpen size={18} /></button>
+      <nav className={`mobile-bottom-nav${mobileKeyboardOpen ? " keyboard-open" : ""}`} aria-label="Primary navigation">
+        <button className={`mobile-nav-item${activeMobileDestination === "home" ? " active" : ""}`} aria-label="Home" aria-current={activeMobileDestination === "home" ? "page" : undefined} onClick={() => navigateView("playground", "home")}><House size={18} /><span>Home</span></button>
+        <button className={`mobile-nav-item${activeMobileDestination === "tree" ? " active" : ""}`} aria-label="Tree workspace" aria-current={activeMobileDestination === "tree" ? "page" : undefined} onClick={() => navigateView("playground", "tree")}><GitBranch size={18} /><span>Tree</span></button>
+        <button className={`mobile-nav-item${activeMobileDestination === "playground" ? " active" : ""}`} aria-label="Playground" aria-current={activeMobileDestination === "playground" ? "page" : undefined} onClick={() => navigateView("playground", "playground")}><TerminalIcon size={18} /><span>Play</span></button>
+        <button className={`mobile-nav-item${activeMobileDestination === "learn" ? " active" : ""}`} aria-label="Learn Git" aria-current={activeMobileDestination === "learn" ? "page" : undefined} onClick={() => navigateView("learn", "learn")}><BookOpen size={18} /><span>Learn</span></button>
+        <button className={`mobile-nav-item${activeMobileDestination === "documentation" ? " active" : ""}`} aria-label="Documentation: Git command encyclopedia" aria-current={activeMobileDestination === "documentation" ? "page" : undefined} onClick={() => navigateView("commands", "documentation")}><BookText size={18} /><span>Docs</span></button>
+        <button ref={moreButtonRef} className={`mobile-nav-item mobile-more-button${moreOpen ? " is-open" : ""}${activeMobileDestination === "more" ? " active" : ""}`} aria-label="More destinations" aria-current={activeMobileDestination === "more" ? "page" : undefined} aria-expanded={moreOpen} aria-controls="mobile-more-sheet" onClick={() => setMoreOpen((current) => !current)}><MoreHorizontal size={19} /><span>More</span></button>
+      </nav>
+      {moreOpen && <>
+        <button className="mobile-more-backdrop" aria-label="Close more destinations" tabIndex={-1} onClick={() => setMoreOpen(false)} />
+        <section className="mobile-more-sheet" id="mobile-more-sheet" aria-labelledby="mobile-more-heading">
+          <div className="mobile-more-heading"><div><span>YOUR WORKSPACE</span><h2 id="mobile-more-heading">More places</h2></div><button className="icon-button" aria-label="Close more destinations" onClick={() => { setMoreOpen(false); moreButtonRef.current?.focus(); }}><X size={17} /></button></div>
+          <div className="mobile-more-repository"><span className="repo-avatar"><Sprout size={15} /></span><span><strong>little-garden</strong><small>{repository?.initialized ? `${repository.branches.length} branches · ${repository.commits.length} commits` : "Not initialized yet"}</small></span></div>
+          <button ref={moreFirstItemRef} className="mobile-more-link" onClick={() => navigateView("playground", "tree")}><GitBranch size={17} /><span><strong>Branches & commits</strong><small>Open your repository tree</small></span><ChevronRight size={15} /></button>
+          <button className="mobile-more-link" onClick={() => navigateView("settings", "more")}><Settings2 size={17} /><span><strong>Preferences</strong><small>Appearance and playground settings</small></span><ChevronRight size={15} /></button>
+          <button className="mobile-more-link" onClick={() => setIsDark((current) => !current)}>{isDark ? <Sun size={17} /> : <Moon size={17} />}<span><strong>{isDark ? "Light appearance" : "Dark appearance"}</strong><small>Switch the workspace theme</small></span><ChevronRight size={15} /></button>
+        </section>
+      </>}
     </div>
   );
 }

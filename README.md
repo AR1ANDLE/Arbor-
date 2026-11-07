@@ -19,8 +19,9 @@ Open the local address printed by Next.js. The first visit creates a temporary r
 - A server-side allowlist of Git operations drawn from the engine registry, including staging, history inspection, branches, merges, undo tools, stashes, and tags.
 - A text file explorer/editor whose files live in the sandbox working directory.
 - An event-driven SVG tree: init plants roots, commits extend wood, branches create limbs, merges graft actual parents, and only pushed commits grow leaves.
-- A small command guide and introductory learning path.
-- Light/dark appearance, responsive layout, keyboard terminal history, and reduced-motion styling.
+- A version-aware Git command encyclopedia kept separate from the playground's explicit execution allowlist, plus an introductory learning path.
+- A desktop workspace sidebar and fixed, safe-area-aware mobile navigation for Home, Tree, Playground, Learn, and the command encyclopedia.
+- Light/dark appearance, keyboard terminal history, and reduced-motion styling.
 
 The current application is a local learning prototype, not a hosted multi-user Git service. It supports a private, per-session bare remote for `git push` practice; arbitrary network remotes, credentials, `pull`, authentication, durable user accounts, full conflict editing, server-backed learning progress, real-workspace access, and a completed WCAG audit are not implemented. Public deployment still needs a different session and isolation architecture. See [docs/arbre-engine-audit.md](./docs/arbre-engine-audit.md), [docs/security.md](./docs/security.md), and [docs/deployment.md](./docs/deployment.md) before exposing it beyond a trusted local machine.
 
@@ -46,6 +47,7 @@ npm start
 - [Git playground](./docs/git-playground.md)
 - [Learning system](./docs/learning-system.md)
 - [Command reference](./docs/command-reference.md)
+- [Git command coverage and version inventory](./docs/git-command-coverage.md)
 - [Security](./docs/security.md)
 - [Accessibility](./docs/accessibility.md)
 - [Deployment](./docs/deployment.md)
